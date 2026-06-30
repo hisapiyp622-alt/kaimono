@@ -49,7 +49,9 @@
     color:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center;
   }
 
-  .chips{ display:flex; gap:8px; overflow-x:auto; margin-top:10px; padding-bottom:2px; -webkit-overflow-scrolling:touch; }
+  .sectionlabel{ font-size:11px; font-weight:800; letter-spacing:.5px; color:var(--muted); margin-top:14px; margin-bottom:6px; }
+
+  .chips{ display:flex; gap:8px; overflow-x:auto; margin-top:0; padding-bottom:2px; -webkit-overflow-scrolling:touch; }
   .chips::-webkit-scrollbar{ display:none; }
   .chip{
     flex-shrink:0; display:flex; align-items:center; gap:6px; padding:7px 12px; border-radius:999px;
@@ -57,6 +59,9 @@
     border:1.5px solid var(--line); background:var(--card); color:var(--muted);
   }
   .chip .dot{ width:8px; height:8px; border-radius:4px; }
+  .chip.quick{ border-color:var(--accent); color:var(--accent); background:#fff; }
+  .chip.quick:active{ background:var(--accent); color:#fff; }
+  .chip.addchip{ border:1.5px dashed var(--faint); color:var(--muted); background:transparent; }
 
   main{ padding:8px 18px 24px; }
   .empty{ text-align:center; color:var(--faint); padding:60px 20px; font-size:15px; line-height:1.7; }
@@ -68,10 +73,10 @@
   .gcount{ font-size:11px; color:var(--faint); }
 
   .item{
-    display:flex; align-items:center; gap:12px; background:var(--card); border:1px solid var(--line);
-    border-radius:12px; padding:12px 12px 12px 14px; margin-bottom:8px;
+    display:flex; align-items:center; gap:6px; background:var(--card); border:1px solid var(--line);
+    border-radius:12px; padding:10px 8px 10px 12px; margin-bottom:8px;
   }
-  .tap{ flex:1; display:flex; align-items:center; gap:12px; background:none; border:none; padding:0;
+  .tap{ flex:1; display:flex; align-items:center; gap:10px; background:none; border:none; padding:0;
         cursor:pointer; text-align:left; font-family:var(--font); min-width:0; }
   .box{ width:24px; height:24px; border-radius:13px; flex-shrink:0; border:2px solid var(--faint);
         display:flex; align-items:center; justify-content:center; transition:background .15s; }
@@ -79,7 +84,16 @@
   .iname{ font-size:16px; font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis;
            white-space:nowrap; transition:color .15s; }
   .iname.on{ color:var(--faint); text-decoration:line-through; }
-  .del{ background:none; border:none; padding:8px; cursor:pointer; flex-shrink:0; display:flex; }
+
+  .qty{ display:flex; align-items:center; gap:4px; flex-shrink:0; }
+  .qbtn{ width:22px; height:22px; border-radius:7px; border:1.5px solid var(--line); background:var(--paper);
+         color:var(--ink); font-size:13px; font-weight:700; display:flex; align-items:center;
+         justify-content:center; cursor:pointer; padding:0; line-height:1; }
+  .qbtn:active{ background:var(--line); }
+  .qnum{ min-width:16px; text-align:center; font-size:14px; font-weight:700; }
+
+  .star{ background:none; border:none; padding:6px; cursor:pointer; flex-shrink:0; display:flex; }
+  .del{ background:none; border:none; padding:6px; cursor:pointer; flex-shrink:0; display:flex; }
 
   .actions{ display:flex; gap:10px; margin-top:22px; }
   .btn{ flex:1; padding:12px; border-radius:12px; font-family:var(--font); font-weight:700; font-size:14px;
@@ -100,12 +114,17 @@
       </div>
       <div class="track" id="track" style="display:none"><div class="fill" id="fill"></div></div>
       <div class="inputrow">
-        <input id="name" placeholder="品名（例：牛乳 2本）" autocomplete="off" />
+        <input id="name" placeholder="品名（例：牛乳）" autocomplete="off" />
         <button id="add" aria-label="追加">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         </button>
       </div>
-      <div class="chips" id="chips"></div>
+
+      <div class="sectionlabel">よく買うもの（タップで追加）</div>
+      <div class="chips quick" id="quickChips"></div>
+
+      <div class="sectionlabel">お店</div>
+      <div class="chips" id="storeChips"></div>
     </div>
   </header>
   <main id="list"></main>
@@ -114,32 +133,41 @@
 <script>
 (function(){
   "use strict";
-  var CATS = [
-    { key:"veg",    label:"青果",        color:"#4CAF6D" },
-    { key:"meat",   label:"肉・魚",      color:"#D9534F" },
-    { key:"dairy",  label:"乳製品・卵",  color:"#E0A33E" },
-    { key:"staple", label:"主食・パン・麺", color:"#C98A3C" },
-    { key:"season", label:"調味料・乾物", color:"#8A6BB0" },
-    { key:"drink",  label:"飲み物",      color:"#3E8FB0" },
-    { key:"daily",  label:"日用品",      color:"#6E8BA6" },
-    { key:"other",  label:"その他",      color:"#9AA39B" }
-  ];
-  var CAT = {}; CATS.forEach(function(c){ CAT[c.key]=c; });
   var KEY = "shopping-list-v1";
+  var PRESETS = ["牛乳","卵","パン","お米","トイレットペーパー","ティッシュ","醤油","洗剤"];
+  var STORE_COLORS = ["#4CAF6D","#D9534F","#E0A33E","#C98A3C","#8A6BB0","#3E8FB0","#6E8BA6","#9AA39B"];
 
-  var state = { items:[], cat:"veg" };
+  var state = { items:[], stores:[], favorites:[], currentStore:"" };
 
   function load(){
     try{
       var raw = localStorage.getItem(KEY);
-      if(raw){ var d = JSON.parse(raw);
-        if(d && Array.isArray(d.items)) state.items = d.items;
-        if(d && d.cat && CAT[d.cat]) state.cat = d.cat;
+      if(raw){
+        var d = JSON.parse(raw);
+        if(d && Array.isArray(d.items)){
+          state.items = d.items.map(function(i){
+            return {
+              id: i.id || uid(),
+              name: i.name,
+              qty: (typeof i.qty === "number" && i.qty > 0) ? i.qty : 1,
+              store: i.store || "",
+              done: !!i.done
+            };
+          });
+        }
+        if(d && Array.isArray(d.stores)) state.stores = d.stores;
+        if(d && Array.isArray(d.favorites)) state.favorites = d.favorites;
+        if(d && typeof d.currentStore === "string") state.currentStore = d.currentStore;
       }
     }catch(e){}
   }
   function save(){
-    try{ localStorage.setItem(KEY, JSON.stringify({ version:1, items:state.items, cat:state.cat })); }catch(e){}
+    try{
+      localStorage.setItem(KEY, JSON.stringify({
+        version:2, items:state.items, stores:state.stores,
+        favorites:state.favorites, currentStore:state.currentStore
+      }));
+    }catch(e){}
   }
   function uid(){ return Math.random().toString(36).slice(2,9); }
   function esc(s){ return String(s).replace(/[&<>"']/g, function(m){
@@ -147,33 +175,78 @@
 
   var $name = document.getElementById("name");
   var $list = document.getElementById("list");
-  var $chips = document.getElementById("chips");
+  var $quick = document.getElementById("quickChips");
+  var $stores = document.getElementById("storeChips");
   var $remain = document.getElementById("remain");
   var $track = document.getElementById("track");
   var $fill = document.getElementById("fill");
-
-  // chips
-  function renderChips(){
-    $chips.innerHTML = "";
-    CATS.forEach(function(c){
-      var on = c.key === state.cat;
-      var b = document.createElement("button");
-      b.className = "chip";
-      if(on){ b.style.background=c.color; b.style.borderColor=c.color; b.style.color="#fff"; }
-      b.innerHTML = '<span class="dot" style="background:'+(on?"#fff":c.color)+'"></span>'+c.label;
-      b.onclick = function(){ state.cat = c.key; save(); renderChips(); };
-      $chips.appendChild(b);
-    });
-  }
 
   // icons
   var ICON = {
     check:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
     x:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#AEB6AC" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
     copy:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
-    trash:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'
+    trash:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+    starOn:'<svg width="16" height="16" viewBox="0 0 24 24" fill="#E8843C" stroke="#E8843C" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+    starOff:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#AEB6AC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
   };
 
+  // ---- よく買うもの（クイック追加） ----
+  function renderQuick(){
+    var names = PRESETS.slice();
+    state.favorites.forEach(function(n){ if(names.indexOf(n) === -1) names.push(n); });
+    var html = "";
+    names.forEach(function(n){
+      html += '<button class="chip quick" data-quick="'+esc(n)+'">'+esc(n)+'</button>';
+    });
+    $quick.innerHTML = html;
+    Array.prototype.forEach.call($quick.querySelectorAll("[data-quick]"), function(el){
+      el.onclick = function(){ addQuick(el.getAttribute("data-quick")); };
+    });
+  }
+  function addQuick(name){
+    state.items.push({ id:uid(), name:name, qty:1, store:state.currentStore, done:false });
+    save(); render();
+  }
+  function isFav(name){ return state.favorites.indexOf(name) !== -1; }
+  function toggleFav(name){
+    var idx = state.favorites.indexOf(name);
+    if(idx === -1) state.favorites.push(name); else state.favorites.splice(idx,1);
+    save(); render();
+  }
+
+  // ---- お店 ----
+  function renderStores(){
+    var html = "";
+    state.stores.forEach(function(s){
+      var on = s.key === state.currentStore;
+      html += '<button class="chip" data-store="'+s.key+'"'
+        + (on ? ' style="background:'+s.color+';border-color:'+s.color+';color:#fff;"' : '')
+        + '><span class="dot" style="background:'+(on?"#fff":s.color)+'"></span>'+esc(s.label)+'</button>';
+    });
+    html += '<button class="chip addchip" id="addStoreBtn">＋ 店舗を追加</button>';
+    $stores.innerHTML = html;
+    Array.prototype.forEach.call($stores.querySelectorAll("[data-store]"), function(el){
+      el.onclick = function(){ state.currentStore = el.getAttribute("data-store"); save(); renderStores(); };
+    });
+    var addBtn = document.getElementById("addStoreBtn");
+    if(addBtn) addBtn.onclick = addStore;
+  }
+  function addStore(){
+    var name = window.prompt("お店の名前を入力してください（例：ライフ、コストコ など）");
+    if(!name) return;
+    name = name.trim();
+    if(!name) return;
+    var exists = state.stores.filter(function(s){ return s.label === name; })[0];
+    if(exists){ state.currentStore = exists.key; save(); renderStores(); return; }
+    var color = STORE_COLORS[state.stores.length % STORE_COLORS.length];
+    var s = { key:uid(), label:name, color:color };
+    state.stores.push(s);
+    state.currentStore = s.key;
+    save(); renderStores();
+  }
+
+  // ---- メインリスト ----
   function render(){
     var total = state.items.length;
     var done = state.items.filter(function(i){return i.done;}).length;
@@ -184,27 +257,40 @@
     $track.style.display = total ? "block" : "none";
     $fill.style.width = pct + "%";
 
+    renderQuick();
+    renderStores();
+
     if(total===0){
       $list.innerHTML = '<div class="empty">リストは空です。<br>上の欄から品物を追加しましょう。</div>';
       return;
     }
 
+    var groups = state.stores.map(function(s){ return { key:s.key, label:s.label, color:s.color }; });
+    groups.push({ key:"", label:"お店未設定", color:"#9AA39B" });
+
     var html = "";
-    CATS.forEach(function(c){
-      var list = state.items.filter(function(i){return i.cat===c.key;})
+    groups.forEach(function(g){
+      var list = state.items.filter(function(i){ return (i.store||"") === g.key; })
         .sort(function(a,b){ return (a.done?1:0)-(b.done?1:0); });
       if(!list.length) return;
       var notDone = list.filter(function(i){return !i.done;}).length;
       html += '<div class="group"><div class="ghead">'
-        + '<span class="dot" style="background:'+c.color+'"></span>'
-        + '<span class="glabel">'+c.label+'</span>'
+        + '<span class="dot" style="background:'+g.color+'"></span>'
+        + '<span class="glabel">'+esc(g.label)+'</span>'
         + '<span class="gcount tnum">'+notDone+' / '+list.length+'</span></div>';
       list.forEach(function(i){
+        var fav = isFav(i.name);
         html += '<div class="item">'
           + '<button class="tap" data-toggle="'+i.id+'">'
           +   '<span class="box'+(i.done?" on":"")+'">'+(i.done?ICON.check:"")+'</span>'
           +   '<span class="iname'+(i.done?" on":"")+'">'+esc(i.name)+'</span>'
           + '</button>'
+          + '<div class="qty">'
+          +   '<button class="qbtn" data-dec="'+i.id+'" aria-label="減らす">－</button>'
+          +   '<span class="qnum tnum">'+(i.qty||1)+'</span>'
+          +   '<button class="qbtn" data-inc="'+i.id+'" aria-label="増やす">＋</button>'
+          + '</div>'
+          + '<button class="star'+(fav?" on":"")+'" data-fav="'+esc(i.name)+'" aria-label="よく買うものに登録">'+(fav?ICON.starOn:ICON.starOff)+'</button>'
           + '<button class="del" data-del="'+i.id+'" aria-label="削除">'+ICON.x+'</button>'
           + '</div>';
       });
@@ -228,6 +314,15 @@
     Array.prototype.forEach.call($list.querySelectorAll("[data-del]"), function(el){
       el.onclick = function(){ del(el.getAttribute("data-del")); };
     });
+    Array.prototype.forEach.call($list.querySelectorAll("[data-inc]"), function(el){
+      el.onclick = function(){ incQty(el.getAttribute("data-inc")); };
+    });
+    Array.prototype.forEach.call($list.querySelectorAll("[data-dec]"), function(el){
+      el.onclick = function(){ decQty(el.getAttribute("data-dec")); };
+    });
+    Array.prototype.forEach.call($list.querySelectorAll("[data-fav]"), function(el){
+      el.onclick = function(){ toggleFav(el.getAttribute("data-fav")); };
+    });
     var cb = document.getElementById("copyBtn"); if(cb) cb.onclick = copyList;
     var cl = document.getElementById("clearBtn"); if(cl) cl.onclick = clearDone;
   }
@@ -235,7 +330,7 @@
   function add(){
     var n = $name.value.trim();
     if(!n) return;
-    state.items.push({ id:uid(), name:n, cat:state.cat, done:false });
+    state.items.push({ id:uid(), name:n, qty:1, store:state.currentStore, done:false });
     $name.value = "";
     save(); render(); $name.focus();
   }
@@ -247,6 +342,21 @@
     state.items = state.items.filter(function(i){ return i.id!==id; });
     save(); render();
   }
+  function incQty(id){
+    state.items = state.items.map(function(i){
+      return i.id===id ? Object.assign({}, i, {qty:(i.qty||1)+1}) : i;
+    });
+    save(); render();
+  }
+  function decQty(id){
+    state.items = state.items.map(function(i){
+      if(i.id!==id) return i;
+      var q = (i.qty||1) - 1;
+      if(q < 1) q = 1;
+      return Object.assign({}, i, {qty:q});
+    });
+    save(); render();
+  }
   function clearDone(){
     state.items = state.items.filter(function(i){ return !i.done; });
     save(); render();
@@ -254,12 +364,14 @@
   function copyList(){
     var txt = "買い物リスト\n";
     var any = false;
-    CATS.forEach(function(c){
-      var list = state.items.filter(function(i){ return i.cat===c.key && !i.done; });
+    var groups = state.stores.map(function(s){ return { key:s.key, label:s.label }; });
+    groups.push({ key:"", label:"お店未設定" });
+    groups.forEach(function(g){
+      var list = state.items.filter(function(i){ return (i.store||"")===g.key && !i.done; });
       if(!list.length) return;
       any = true;
-      txt += "\n【"+c.label+"】\n";
-      list.forEach(function(i){ txt += "・"+i.name+"\n"; });
+      txt += "\n【"+g.label+"】\n";
+      list.forEach(function(i){ txt += "・"+i.name+((i.qty && i.qty>1) ? " ×"+i.qty : "")+"\n"; });
     });
     if(!any) txt += "\n（買うものはありません）";
     txt = txt.trim();
@@ -289,7 +401,7 @@
   document.getElementById("add").onclick = add;
   $name.addEventListener("keydown", function(e){ if(e.key==="Enter") add(); });
 
-  load(); renderChips(); render();
+  load(); render();
 })();
 </script>
 </body>
