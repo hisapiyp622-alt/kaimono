@@ -62,6 +62,14 @@
   .chip.quick{ border-color:var(--accent); color:var(--accent); background:#fff; }
   .chip.quick:active{ background:var(--accent); color:#fff; }
   .chip.addchip{ border:1.5px dashed var(--faint); color:var(--muted); background:transparent; }
+  .storeform{ display:flex; align-items:center; gap:6px; flex-shrink:0; }
+  .storeInput{
+    width:128px; padding:6px 12px; border-radius:999px; border:1.5px solid var(--accent);
+    font-family:var(--font); font-size:13px; outline:none; background:var(--card); color:var(--ink);
+  }
+  .storeOk, .storeCancel{ font-size:15px; font-weight:900; line-height:1; }
+  .storeOk{ color:var(--done); border-color:var(--done); }
+  .storeCancel{ color:var(--muted); }
 
   main{ padding:8px 18px 24px; }
   .empty{ text-align:center; color:var(--faint); padding:60px 20px; font-size:15px; line-height:1.7; }
@@ -138,6 +146,7 @@
   var STORE_COLORS = ["#4CAF6D","#D9534F","#E0A33E","#C98A3C","#8A6BB0","#3E8FB0","#6E8BA6","#9AA39B"];
 
   var state = { items:[], stores:[], favorites:[], currentStore:"" };
+  var addingStore = false; // 一時的な表示状態（保存しない）
 
   function load(){
     try{
@@ -224,26 +233,54 @@
         + (on ? ' style="background:'+s.color+';border-color:'+s.color+';color:#fff;"' : '')
         + '><span class="dot" style="background:'+(on?"#fff":s.color)+'"></span>'+esc(s.label)+'</button>';
     });
-    html += '<button class="chip addchip" id="addStoreBtn">＋ 店舗を追加</button>';
+    if(addingStore){
+      html += '<span class="storeform">'
+        + '<input id="storeInput" class="storeInput" placeholder="お店の名前" autocomplete="off" />'
+        + '<button class="qbtn storeOk" id="storeOkBtn" aria-label="追加">&#10003;</button>'
+        + '<button class="qbtn storeCancel" id="storeCancelBtn" aria-label="キャンセル">&times;</button>'
+        + '</span>';
+    } else {
+      html += '<button class="chip addchip" id="addStoreBtn">＋ 店舗を追加</button>';
+    }
     $stores.innerHTML = html;
     Array.prototype.forEach.call($stores.querySelectorAll("[data-store]"), function(el){
       el.onclick = function(){ state.currentStore = el.getAttribute("data-store"); save(); renderStores(); };
     });
-    var addBtn = document.getElementById("addStoreBtn");
-    if(addBtn) addBtn.onclick = addStore;
+    if(addingStore){
+      var input = document.getElementById("storeInput");
+      if(input){
+        input.focus();
+        input.addEventListener("keydown", function(e){
+          if(e.key === "Enter") commitStore();
+          if(e.key === "Escape") cancelAddStore();
+        });
+      }
+      var okBtn = document.getElementById("storeOkBtn"); if(okBtn) okBtn.onclick = commitStore;
+      var cancelBtn = document.getElementById("storeCancelBtn"); if(cancelBtn) cancelBtn.onclick = cancelAddStore;
+    } else {
+      var addBtn = document.getElementById("addStoreBtn");
+      if(addBtn) addBtn.onclick = function(){ addingStore = true; renderStores(); };
+    }
   }
-  function addStore(){
-    var name = window.prompt("お店の名前を入力してください（例：ライフ、コストコ など）");
-    if(!name) return;
-    name = name.trim();
-    if(!name) return;
+  function commitStore(){
+    var input = document.getElementById("storeInput");
+    var name = input ? input.value.trim() : "";
+    addingStore = false;
+    if(!name){ renderStores(); return; }
     var exists = state.stores.filter(function(s){ return s.label === name; })[0];
-    if(exists){ state.currentStore = exists.key; save(); renderStores(); return; }
-    var color = STORE_COLORS[state.stores.length % STORE_COLORS.length];
-    var s = { key:uid(), label:name, color:color };
-    state.stores.push(s);
-    state.currentStore = s.key;
-    save(); renderStores();
+    if(exists){
+      state.currentStore = exists.key;
+    } else {
+      var color = STORE_COLORS[state.stores.length % STORE_COLORS.length];
+      var s = { key:uid(), label:name, color:color };
+      state.stores.push(s);
+      state.currentStore = s.key;
+    }
+    save(); render();
+  }
+  function cancelAddStore(){
+    addingStore = false;
+    renderStores();
   }
 
   // ---- メインリスト ----
