@@ -77,6 +77,10 @@
   .storeOk{ color:var(--done); border-color:var(--done); }
   .storeCancel{ color:var(--muted); }
 
+  .syncBox{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .syncMsg{ font-size:11px; color:var(--muted); margin-top:6px; min-height:14px; }
+  .syncMsg.err{ color:#D9534F; }
+
   main{ padding:8px 18px 24px; }
   .empty{ text-align:center; color:var(--faint); padding:60px 20px; font-size:15px; line-height:1.7; }
 
@@ -139,6 +143,10 @@
 
       <div class="sectionlabel">お店</div>
       <div class="chips" id="storeChips"></div>
+
+      <div class="sectionlabel">他の端末と同期</div>
+      <div class="syncBox" id="syncBox"></div>
+      <div class="syncMsg" id="syncMsg"></div>
     </div>
   </header>
   <main id="list"></main>
@@ -154,6 +162,20 @@
   var state = { items:[], stores:[], favorites:[], currentStore:"", quickOrder:[] };
   var addingStore = false; // 一時的な表示状態（保存しない）
   var suppressClick = false; // 長押し並び替え直後のクリック誤発火を防ぐ
+
+  // ---- 他の端末との同期（Firebase）----
+  var fbApp=null, fbAuth=null, fbDb=null, fbRef=null, fbSet=null, fbGet=null, fbOnValue=null;
+  var fbReady = false;
+  var fbLoadPromise = null;
+  var SYNC_KEY = "shopping-list-sync-v1";
+  var syncCfg = { code:"", clientId:"" };
+  var syncStatus = "off"; // off | connecting | on | error
+  var syncJoinMode = false; // コード入力フォームの表示状態（保存しない）
+  var applyingRemote = false; // クラウドから受信した更新を反映中フラグ（再送信を防ぐ）
+  var syncListenerUnsub = null;
+  var syncPushTimer = null;
+  var authReady = false;
+  var authQueue = [];
 
   function load(){
     try{
@@ -186,6 +208,7 @@
         quickOrder:state.quickOrder
       }));
     }catch(e){}
+    if(syncCfg.code && !applyingRemote) schedulePush();
   }
   function uid(){ return Math.random().toString(36).slice(2,9); }
   function esc(s){ return String(s).replace(/[&<>"']/g, function(m){
@@ -198,6 +221,8 @@
   var $remain = document.getElementById("remain");
   var $track = document.getElementById("track");
   var $fill = document.getElementById("fill");
+  var $sync = document.getElementById("syncBox");
+  var $syncMsg = document.getElementById("syncMsg");
 
   // icons
   var ICON = {
@@ -395,6 +420,248 @@
     save(); render();
   }
 
+  // ---- 他の端末と同期 ----
+  function loadSyncCfg(){
+    try{
+      var raw = localStorage.getItem(SYNC_KEY);
+      if(raw){
+        var d = JSON.parse(raw);
+        if(d && typeof d.code === "string") syncCfg.code = d.code;
+        if(d && typeof d.clientId === "string") syncCfg.clientId = d.clientId;
+      }
+    }catch(e){}
+    if(!syncCfg.clientId) syncCfg.clientId = uid()+uid()+uid();
+    syncStatus = syncCfg.code ? "connecting" : "off";
+    saveSyncCfg();
+  }
+  function saveSyncCfg(){
+    try{ localStorage.setItem(SYNC_KEY, JSON.stringify(syncCfg)); }catch(e){}
+  }
+  function genSyncCode(){
+    var chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 0/O, 1/I など紛らわしい文字は除外
+    var s = "";
+    for(var i=0;i<6;i++) s += chars.charAt(Math.floor(Math.random()*chars.length));
+    return s;
+  }
+  function whenAuthReady(fn){
+    if(authReady) fn(); else authQueue.push(fn);
+  }
+  function ensureFirebase(){
+    if(fbReady) return Promise.resolve();
+    if(!fbLoadPromise) fbLoadPromise = loadFirebase();
+    return fbLoadPromise;
+  }
+  function loadFirebase(){
+    return Promise.all([
+      import("https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js"),
+      import("https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js"),
+      import("https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js")
+    ]).then(function(mods){
+      var appMod = mods[0], dbMod = mods[1], authMod = mods[2];
+      var firebaseConfig = {
+        apiKey: "AIzaSyDW4K6NU8vcDdKT79wqPhtiuWXQX2rFmV8",
+        authDomain: "kaimono-sync.firebaseapp.com",
+        databaseURL: "https://kaimono-sync-default-rtdb.firebaseio.com",
+        projectId: "kaimono-sync",
+        storageBucket: "kaimono-sync.firebasestorage.app",
+        messagingSenderId: "543116430313",
+        appId: "1:543116430313:web:c405b35720427a88369978"
+      };
+      fbApp = appMod.initializeApp(firebaseConfig);
+      fbAuth = authMod.getAuth(fbApp);
+      fbDb = dbMod.getDatabase(fbApp);
+      fbRef = dbMod.ref; fbSet = dbMod.set; fbGet = dbMod.get; fbOnValue = dbMod.onValue;
+      fbReady = true;
+      authMod.onAuthStateChanged(fbAuth, function(user){
+        authReady = !!user;
+        if(authReady){
+          var q = authQueue; authQueue = [];
+          q.forEach(function(fn){ try{ fn(); }catch(e){} });
+          if(syncCfg.code) startSyncListener();
+        }
+      });
+      return authMod.signInAnonymously(fbAuth);
+    }).catch(function(e){
+      fbReady = false;
+      setSyncStatus("error");
+      throw e;
+    });
+  }
+  function startSyncListener(){
+    if(!fbReady || !syncCfg.code) return;
+    stopSyncListener();
+    setSyncStatus("connecting");
+    var r = fbRef(fbDb, "lists/"+syncCfg.code);
+    syncListenerUnsub = fbOnValue(r, function(snap){
+      setSyncStatus("on");
+      var val = snap.val();
+      if(!val || !val.state) return;
+      if(val.clientId === syncCfg.clientId) return; // 自分が送った変更は無視（エコー防止）
+      applyRemoteState(val.state);
+    }, function(err){
+      setSyncStatus("error");
+    });
+  }
+  function stopSyncListener(){
+    if(syncListenerUnsub){
+      try{ syncListenerUnsub(); }catch(e){}
+      syncListenerUnsub = null;
+    }
+  }
+  function schedulePush(){
+    if(syncPushTimer) clearTimeout(syncPushTimer);
+    syncPushTimer = setTimeout(function(){
+      syncPushTimer = null;
+      ensureFirebase().then(function(){ whenAuthReady(pushStateToCloud); })
+        .catch(function(){ setSyncStatus("error"); });
+    }, 400);
+  }
+  function pushStateToCloud(){
+    if(!fbReady || !syncCfg.code) return;
+    var r = fbRef(fbDb, "lists/"+syncCfg.code);
+    fbSet(r, {
+      state: {
+        items: state.items, stores: state.stores, favorites: state.favorites,
+        currentStore: state.currentStore, quickOrder: state.quickOrder
+      },
+      clientId: syncCfg.clientId,
+      updatedAt: Date.now()
+    }).catch(function(e){ setSyncStatus("error"); });
+  }
+  function applyRemoteState(remote){
+    applyingRemote = true;
+    try{
+      if(remote && Array.isArray(remote.items)){
+        state.items = remote.items.map(function(i){
+          return {
+            id: i.id || uid(),
+            name: i.name,
+            qty: (typeof i.qty === "number" && i.qty > 0) ? i.qty : 1,
+            store: i.store || "",
+            done: !!i.done
+          };
+        });
+      }
+      if(remote && Array.isArray(remote.stores)) state.stores = remote.stores;
+      if(remote && Array.isArray(remote.favorites)) state.favorites = remote.favorites;
+      if(remote && typeof remote.currentStore === "string") state.currentStore = remote.currentStore;
+      if(remote && Array.isArray(remote.quickOrder)) state.quickOrder = remote.quickOrder;
+      save(); render();
+    }catch(e){}
+    applyingRemote = false;
+  }
+  function createSync(){
+    setSyncStatus("connecting");
+    ensureFirebase().then(function(){
+      whenAuthReady(function(){
+        var code = genSyncCode();
+        syncCfg.code = code;
+        saveSyncCfg();
+        pushStateToCloud();
+        startSyncListener();
+        renderSyncBox();
+      });
+    }).catch(function(){ setSyncStatus("error"); });
+  }
+  function joinSync(code){
+    setSyncStatus("connecting");
+    ensureFirebase().then(function(){
+      whenAuthReady(function(){
+        var r = fbRef(fbDb, "lists/"+code);
+        fbGet(r).then(function(snap){
+          var val = snap.val();
+          syncCfg.code = code;
+          saveSyncCfg();
+          if(val && val.state){
+            applyRemoteState(val.state);
+          } else {
+            pushStateToCloud();
+          }
+          startSyncListener();
+          renderSyncBox();
+        }).catch(function(){ setSyncStatus("error"); });
+      });
+    }).catch(function(){ setSyncStatus("error"); });
+  }
+  function disconnectSync(){
+    stopSyncListener();
+    syncCfg.code = "";
+    saveSyncCfg();
+    setSyncStatus("off");
+  }
+  function setSyncStatus(s){
+    syncStatus = s;
+    renderSyncBox();
+  }
+  function statusLabel(){
+    if(syncStatus === "connecting") return { text:"接続中…", err:false };
+    if(syncStatus === "error") return { text:"接続できませんでした。電波の良い場所で再度お試しください。", err:true };
+    if(syncStatus === "on") return { text:"自動で同期しています", err:false };
+    return { text:"", err:false };
+  }
+  function renderSyncBox(){
+    var html = "";
+    if(syncCfg.code){
+      html += '<span class="chip storechip" style="background:var(--done);border-color:var(--done);color:#fff;">'
+        +   '<span class="dot" style="background:#fff"></span>コード: '+esc(syncCfg.code)
+        + '</span>'
+        + '<button class="chip addchip" id="copySyncBtn">コピー</button>'
+        + '<button class="chip addchip" id="unsyncBtn">同期を解除</button>';
+      $sync.innerHTML = html;
+      var copyBtn = document.getElementById("copySyncBtn"); if(copyBtn) copyBtn.onclick = copySyncCode;
+      var unsyncBtn = document.getElementById("unsyncBtn"); if(unsyncBtn) unsyncBtn.onclick = disconnectSync;
+      var label = statusLabel();
+      $syncMsg.textContent = label.text;
+      $syncMsg.className = "syncMsg" + (label.err ? " err" : "");
+    } else if(syncJoinMode){
+      html += '<span class="storeform">'
+        + '<input id="joinCodeInput" class="storeInput" style="width:120px;text-transform:uppercase;" placeholder="6桁のコード" autocomplete="off" maxlength="6" />'
+        + '<button class="qbtn storeOk" id="joinOkBtn">&#10003;</button>'
+        + '<button class="qbtn storeCancel" id="joinCancelBtn">&times;</button>'
+        + '</span>';
+      $sync.innerHTML = html;
+      var input = document.getElementById("joinCodeInput");
+      if(input){
+        input.focus();
+        input.addEventListener("keydown", function(e){
+          if(e.key === "Enter") commitJoin();
+          if(e.key === "Escape") cancelJoin();
+        });
+      }
+      var okBtn = document.getElementById("joinOkBtn"); if(okBtn) okBtn.onclick = commitJoin;
+      var cancelBtn = document.getElementById("joinCancelBtn"); if(cancelBtn) cancelBtn.onclick = cancelJoin;
+      $syncMsg.textContent = "";
+    } else {
+      html += '<button class="chip quick" id="createSyncBtn">＋ 同期コードを作成</button>'
+        + '<button class="chip addchip" id="joinSyncBtn">コードで参加</button>';
+      $sync.innerHTML = html;
+      var createBtn = document.getElementById("createSyncBtn"); if(createBtn) createBtn.onclick = createSync;
+      var joinBtn = document.getElementById("joinSyncBtn"); if(joinBtn) joinBtn.onclick = function(){ syncJoinMode = true; renderSyncBox(); };
+      $syncMsg.textContent = "";
+    }
+  }
+  function commitJoin(){
+    var input = document.getElementById("joinCodeInput");
+    var code = input ? input.value.trim().toUpperCase() : "";
+    syncJoinMode = false;
+    if(!code){ renderSyncBox(); return; }
+    joinSync(code);
+  }
+  function cancelJoin(){
+    syncJoinMode = false;
+    renderSyncBox();
+  }
+  function copySyncCode(){
+    var txt = syncCfg.code;
+    var btn = document.getElementById("copySyncBtn");
+    function flash(){
+      if(btn){ btn.textContent = "コピーしました"; setTimeout(function(){ if(btn) btn.textContent = "コピー"; }, 1500); }
+    }
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(flash).catch(function(){ fallbackCopy(txt); flash(); });
+    } else { fallbackCopy(txt); flash(); }
+  }
+
   // ---- メインリスト ----
   function render(){
     var total = state.items.length;
@@ -408,6 +675,7 @@
 
     renderQuick();
     renderStores();
+    renderSyncBox();
 
     if(total===0){
       $list.innerHTML = '<div class="empty">リストは空です。<br>上の欄から品物を追加しましょう。</div>';
@@ -567,7 +835,10 @@
     }
   });
 
-  load(); render();
+  load();
+  loadSyncCfg();
+  render();
+  if(syncCfg.code){ ensureFirebase().catch(function(){ setSyncStatus("error"); }); }
 })();
 </script>
 </body>
