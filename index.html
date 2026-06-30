@@ -51,18 +51,20 @@
 
   .sectionlabel{ font-size:11px; font-weight:800; letter-spacing:.5px; color:var(--muted); margin-top:14px; margin-bottom:6px; }
 
-  .chips{ display:flex; gap:8px; overflow-x:auto; margin-top:0; padding-bottom:2px; -webkit-overflow-scrolling:touch; }
+  .chips{ display:flex; gap:8px; overflow-x:auto; margin-top:0; padding-bottom:2px; -webkit-overflow-scrolling:touch; touch-action:pan-x; }
   .chips::-webkit-scrollbar{ display:none; }
   .chip{
     flex-shrink:0; display:flex; align-items:center; gap:6px; padding:7px 12px; border-radius:999px;
     cursor:pointer; font-family:var(--font); font-size:13px; font-weight:700;
     border:1.5px solid var(--line); background:var(--card); color:var(--muted);
+    user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
   }
   .chip .dot{ width:8px; height:8px; border-radius:4px; }
   .chip.quick{ border-color:var(--accent); color:var(--accent); background:#fff; }
   .chip.quick:active{ background:var(--accent); color:#fff; }
   .chip.addchip{ border:1.5px dashed var(--faint); color:var(--muted); background:transparent; }
   .chip.storechip{ padding:0 6px 0 12px; gap:2px; }
+  .chip.dragging{ box-shadow:0 6px 16px rgba(35,61,46,.25); transform:scale(1.06); z-index:3; position:relative; }
   .storeSelect{ background:none; border:none; padding:7px 4px 7px 0; font:inherit; color:inherit;
     cursor:pointer; display:flex; align-items:center; gap:6px; }
   .storeDel{ background:none; border:none; padding:4px 4px; cursor:pointer; color:inherit; opacity:.55; font-size:14px; line-height:1; }
@@ -149,8 +151,9 @@
   var PRESETS = ["牛乳","卵","パン","お米","トイレットペーパー","ティッシュ","醤油","洗剤"];
   var STORE_COLORS = ["#4CAF6D","#D9534F","#E0A33E","#C98A3C","#8A6BB0","#3E8FB0","#6E8BA6","#9AA39B"];
 
-  var state = { items:[], stores:[], favorites:[], currentStore:"" };
+  var state = { items:[], stores:[], favorites:[], currentStore:"", quickOrder:[] };
   var addingStore = false; // 一時的な表示状態（保存しない）
+  var suppressClick = false; // 長押し並び替え直後のクリック誤発火を防ぐ
 
   function load(){
     try{
@@ -171,6 +174,7 @@
         if(d && Array.isArray(d.stores)) state.stores = d.stores;
         if(d && Array.isArray(d.favorites)) state.favorites = d.favorites;
         if(d && typeof d.currentStore === "string") state.currentStore = d.currentStore;
+        if(d && Array.isArray(d.quickOrder)) state.quickOrder = d.quickOrder;
       }
     }catch(e){}
   }
@@ -178,7 +182,8 @@
     try{
       localStorage.setItem(KEY, JSON.stringify({
         version:2, items:state.items, stores:state.stores,
-        favorites:state.favorites, currentStore:state.currentStore
+        favorites:state.favorites, currentStore:state.currentStore,
+        quickOrder:state.quickOrder
       }));
     }catch(e){}
   }
@@ -204,17 +209,100 @@
     starOff:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#AEB6AC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
   };
 
+  // ---- 並び替え（長押しドラッグ） ----
+  // container 内の itemSelector に一致する要素を、長押し（ホールド）してから
+  // ドラッグすると並び替えできるようにする。通常のタップ／横スワイプは妨げない。
+  function enableReorder(container, opts){
+    var HOLD_MS = 420;
+    var MOVE_CANCEL = 10;
+    var holdTimer = null;
+    var dragEl = null;
+    var dragging = false;
+    var startX = 0, startY = 0;
+
+    function items(){ return Array.prototype.slice.call(container.querySelectorAll(opts.itemSelector)); }
+    function clearHold(){ if(holdTimer){ clearTimeout(holdTimer); holdTimer = null; } }
+
+    function onMove(e){
+      if(!dragEl) return;
+      if(!dragging){
+        var dx = Math.abs(e.clientX - startX), dy = Math.abs(e.clientY - startY);
+        if(dx > MOVE_CANCEL || dy > MOVE_CANCEL) clearHold();
+        return;
+      }
+      e.preventDefault();
+      var x = e.clientX;
+      var siblings = items().filter(function(el){ return el !== dragEl; });
+      var target = null;
+      for(var i=0;i<siblings.length;i++){
+        var r = siblings[i].getBoundingClientRect();
+        if(x < r.left + r.width/2){ target = siblings[i]; break; }
+      }
+      if(target){
+        container.insertBefore(dragEl, target);
+      } else if(opts.boundarySelector){
+        var boundary = container.querySelector(opts.boundarySelector);
+        if(boundary) container.insertBefore(dragEl, boundary);
+        else container.appendChild(dragEl);
+      } else {
+        container.appendChild(dragEl);
+      }
+    }
+    function onUp(){
+      clearHold();
+      container.removeEventListener("pointermove", onMove);
+      container.removeEventListener("pointerup", onUp);
+      container.removeEventListener("pointercancel", onUp);
+      if(dragging){
+        dragging = false;
+        container.classList.remove("sorting");
+        if(dragEl) dragEl.classList.remove("dragging");
+        var newIds = items().map(function(el){ return el.getAttribute(opts.idAttr); });
+        suppressClick = true;
+        setTimeout(function(){ suppressClick = false; }, 0);
+        opts.onReorder(newIds);
+      }
+      dragEl = null;
+    }
+    container.addEventListener("pointerdown", function(e){
+      if(dragging) return;
+      var el = e.target.closest(opts.itemSelector);
+      if(!el || !container.contains(el)) return;
+      dragEl = el; startX = e.clientX; startY = e.clientY;
+      clearHold();
+      holdTimer = setTimeout(function(){
+        if(!dragEl) return;
+        dragging = true;
+        container.classList.add("sorting");
+        dragEl.classList.add("dragging");
+        if(navigator.vibrate){ try{ navigator.vibrate(10); }catch(err){} }
+      }, HOLD_MS);
+      container.addEventListener("pointermove", onMove, {passive:false});
+      container.addEventListener("pointerup", onUp);
+      container.addEventListener("pointercancel", onUp);
+    });
+  }
+
   // ---- よく買うもの（クイック追加） ----
-  function renderQuick(){
+  function getQuickNames(){
     var names = PRESETS.slice();
     state.favorites.forEach(function(n){ if(names.indexOf(n) === -1) names.push(n); });
+    return names;
+  }
+  function syncQuickOrder(){
+    var names = getQuickNames();
+    state.quickOrder = state.quickOrder.filter(function(n){ return names.indexOf(n) !== -1; });
+    names.forEach(function(n){ if(state.quickOrder.indexOf(n) === -1) state.quickOrder.push(n); });
+  }
+  function renderQuick(){
+    syncQuickOrder();
     var html = "";
-    names.forEach(function(n){
+    state.quickOrder.forEach(function(n){
       html += '<button class="chip quick" data-quick="'+esc(n)+'">'+esc(n)+'</button>';
     });
     $quick.innerHTML = html;
     Array.prototype.forEach.call($quick.querySelectorAll("[data-quick]"), function(el){
-      el.onclick = function(){ addQuick(el.getAttribute("data-quick")); };
+      el.onclick = function(){ if(suppressClick) return; addQuick(el.getAttribute("data-quick")); };
     });
   }
   function addQuick(name){
@@ -233,7 +321,7 @@
     var html = "";
     state.stores.forEach(function(s){
       var on = s.key === state.currentStore;
-      html += '<span class="chip storechip"'
+      html += '<span class="chip storechip" data-storekey="'+s.key+'"'
         + (on ? ' style="background:'+s.color+';border-color:'+s.color+';color:#fff;"' : '')
         + '>'
         + '<button class="storeSelect" data-store="'+s.key+'">'
@@ -253,7 +341,10 @@
     }
     $stores.innerHTML = html;
     Array.prototype.forEach.call($stores.querySelectorAll("[data-store]"), function(el){
-      el.onclick = function(){ state.currentStore = el.getAttribute("data-store"); save(); renderStores(); };
+      el.onclick = function(){
+        if(suppressClick) return;
+        state.currentStore = el.getAttribute("data-store"); save(); renderStores();
+      };
     });
     Array.prototype.forEach.call($stores.querySelectorAll("[data-storedel]"), function(el){
       el.onclick = function(e){ e.stopPropagation(); deleteStore(el.getAttribute("data-storedel")); };
@@ -458,6 +549,23 @@
 
   document.getElementById("add").onclick = add;
   $name.addEventListener("keydown", function(e){ if(e.key==="Enter") add(); });
+
+  // 並び替え機能を一度だけ有効化（コンテナ自体は再描画されないため）
+  enableReorder($quick, {
+    itemSelector: ".chip.quick",
+    idAttr: "data-quick",
+    onReorder: function(newNames){ state.quickOrder = newNames; save(); render(); }
+  });
+  enableReorder($stores, {
+    itemSelector: ".storechip",
+    idAttr: "data-storekey",
+    boundarySelector: "#addStoreBtn, .storeform",
+    onReorder: function(newKeys){
+      var map = {}; state.stores.forEach(function(s){ map[s.key] = s; });
+      state.stores = newKeys.map(function(k){ return map[k]; }).filter(Boolean);
+      save(); render();
+    }
+  });
 
   load(); render();
 })();
