@@ -62,6 +62,10 @@
   .chip.quick{ border-color:var(--accent); color:var(--accent); background:#fff; }
   .chip.quick:active{ background:var(--accent); color:#fff; }
   .chip.addchip{ border:1.5px dashed var(--faint); color:var(--muted); background:transparent; }
+  .chip.storechip{ padding:0 6px 0 12px; gap:2px; }
+  .storeSelect{ background:none; border:none; padding:7px 4px 7px 0; font:inherit; color:inherit;
+    cursor:pointer; display:flex; align-items:center; gap:6px; }
+  .storeDel{ background:none; border:none; padding:4px 4px; cursor:pointer; color:inherit; opacity:.55; font-size:14px; line-height:1; }
   .storeform{ display:flex; align-items:center; gap:6px; flex-shrink:0; }
   .storeInput{
     width:128px; padding:6px 12px; border-radius:999px; border:1.5px solid var(--accent);
@@ -229,9 +233,14 @@
     var html = "";
     state.stores.forEach(function(s){
       var on = s.key === state.currentStore;
-      html += '<button class="chip" data-store="'+s.key+'"'
+      html += '<span class="chip storechip"'
         + (on ? ' style="background:'+s.color+';border-color:'+s.color+';color:#fff;"' : '')
-        + '><span class="dot" style="background:'+(on?"#fff":s.color)+'"></span>'+esc(s.label)+'</button>';
+        + '>'
+        + '<button class="storeSelect" data-store="'+s.key+'">'
+        +   '<span class="dot" style="background:'+(on?"#fff":s.color)+'"></span>'+esc(s.label)
+        + '</button>'
+        + '<button class="storeDel" data-storedel="'+s.key+'" aria-label="店舗を削除">&times;</button>'
+        + '</span>';
     });
     if(addingStore){
       html += '<span class="storeform">'
@@ -245,6 +254,9 @@
     $stores.innerHTML = html;
     Array.prototype.forEach.call($stores.querySelectorAll("[data-store]"), function(el){
       el.onclick = function(){ state.currentStore = el.getAttribute("data-store"); save(); renderStores(); };
+    });
+    Array.prototype.forEach.call($stores.querySelectorAll("[data-storedel]"), function(el){
+      el.onclick = function(e){ e.stopPropagation(); deleteStore(el.getAttribute("data-storedel")); };
     });
     if(addingStore){
       var input = document.getElementById("storeInput");
@@ -281,6 +293,15 @@
   function cancelAddStore(){
     addingStore = false;
     renderStores();
+  }
+  function deleteStore(key){
+    state.stores = state.stores.filter(function(s){ return s.key !== key; });
+    // この店舗の商品は「お店未設定」に戻す（削除はしない）
+    state.items = state.items.map(function(i){
+      return i.store === key ? Object.assign({}, i, {store:""}) : i;
+    });
+    if(state.currentStore === key) state.currentStore = "";
+    save(); render();
   }
 
   // ---- メインリスト ----
